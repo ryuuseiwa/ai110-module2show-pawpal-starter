@@ -1,0 +1,85 @@
+classDiagram
+    %% Final design: matches pawpal_system.py
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+        +parse(value)$ Priority
+    }
+
+    class Task {
+        <<dataclass>>
+        +str description
+        +str time
+        +int duration_minutes
+        +Priority priority
+        +str frequency
+        +date due_date
+        +bool completed
+        +str pet_name
+        +start_minutes() int
+        +end_minutes() int
+        +emoji() str
+        +mark_complete() None
+        +next_occurrence() Task
+        +to_dict() dict
+        +from_dict(data)$ Task
+    }
+
+    class Pet {
+        <<dataclass>>
+        +str name
+        +str species
+        +int age
+        +list~Task~ tasks
+        +add_task(task) None
+        +remove_task(task) None
+        +get_tasks() list~Task~
+        +task_count() int
+        +to_dict() dict
+        +from_dict(data)$ Pet
+    }
+
+    class Owner {
+        +str name
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +get_pet(name) Pet
+        +get_all_tasks() list~Task~
+        +to_dict() dict
+        +from_dict(data)$ Owner
+        +save_to_json(path) None
+        +load_from_json(path)$ Owner
+    }
+
+    class Scheduler {
+        +Owner owner
+        +todays_schedule(on) list~Task~
+        +sort_by_time(tasks) list~Task~
+        +sort_by_priority(tasks) list~Task~
+        +filter_tasks(tasks, pet_name, completed, on) list~Task~
+        +mark_task_complete(task) Task
+        +detect_conflicts(on) list~str~
+        +find_next_available_slot(duration_minutes, on, day_start, day_end) str
+        +plan_day(available_minutes, on) DailyPlan
+    }
+
+    class DailyPlan {
+        <<dataclass>>
+        +list~Task~ scheduled
+        +list~Task~ skipped
+        +dict reasons
+        +int minutes_used
+        +int minutes_available
+        +reason_for(task) str
+    }
+
+    Owner "1" o-- "*" Pet : has
+    Pet "1" *-- "*" Task : owns
+    Task --> Priority : uses
+    Scheduler --> Owner : reads via get_all_tasks()
+    Scheduler ..> Task : sorts / filters / completes
+    Scheduler ..> DailyPlan : creates
+    DailyPlan o-- Task : references
