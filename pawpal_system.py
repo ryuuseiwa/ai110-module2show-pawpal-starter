@@ -158,9 +158,12 @@ class Pet:
         self.tasks.append(task)
 
     def remove_task(self, task: Task) -> None:
-        """Remove a task from this pet (no-op if it isn't there)."""
-        if task in self.tasks:
-            self.tasks.remove(task)
+        """Remove this exact task object (no-op if it isn't there).
+
+        Matches by identity, because dataclass == would also match a
+        different task with identical fields.
+        """
+        self.tasks = [t for t in self.tasks if t is not task]
 
     def get_tasks(self) -> list[Task]:
         """Return a copy of this pet's task list."""
@@ -305,7 +308,13 @@ class Scheduler:
     # ----- recurring tasks -------------------------------------------------
 
     def mark_task_complete(self, task: Task) -> Task | None:
-        """Complete a task; if it recurs, add its next occurrence to the pet and return it."""
+        """Complete a task; if it recurs, add its next occurrence to the pet and return it.
+
+        Completing an already-completed task does nothing, so a double click
+        can't spawn duplicate future tasks.
+        """
+        if task.completed:
+            return None
         task.mark_complete()
         next_task = task.next_occurrence()
         if next_task is None:
