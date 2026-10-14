@@ -4,13 +4,30 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+Three core actions a user should be able to perform:
+
+1. **Add a pet** (name, species, age) to their household.
+2. **Schedule a care task** for a pet — e.g. a walk at 08:00 for 30 minutes, daily, high priority.
+3. **See today's schedule** — every task for every pet, in time order, with warnings when two tasks collide.
+
+My initial UML (`diagrams/uml_draft.mmd`) had four classes:
+
+- **Task** (dataclass) — one care activity: description, time (`"HH:MM"`), duration, priority, frequency, and completion status. Its only behavior was `mark_complete()`.
+- **Pet** (dataclass) — pet details plus the list of tasks that belong to that pet; responsible for adding/removing its own tasks.
+- **Owner** — holds multiple pets and exposes `get_all_tasks()`, the single place where every pet's tasks are gathered together.
+- **Scheduler** — the "brain". It holds a reference to an `Owner` and reads tasks through `get_all_tasks()`, so it always works across all pets. It is responsible for sorting, filtering, conflict detection, and producing today's schedule.
+
+Relationships: Owner *has* many Pets (aggregation), a Pet *owns* many Tasks (composition), and the Scheduler *reads from* the Owner.
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes. When I asked the AI to review the skeleton for missing relationships and bottlenecks, it flagged three problems, and I made these changes:
+
+1. **Tasks didn't know which pet they belonged to.** `Owner.get_all_tasks()` returns a flat list, so once tasks were merged the Scheduler couldn't filter by pet or print "Mochi: walk". I added a `pet_name` field on `Task` that `Pet.add_task()` fills in automatically, instead of returning `(pet, task)` tuples everywhere.
+2. **Recurring tasks had no date.** "Daily" is meaningless without knowing *which* day a task is for, so I added `due_date: date` and a `next_occurrence()` method that uses `timedelta` to build the next instance.
+3. **Priority as a free string would sort alphabetically** ("high" < "low" < "medium"). I replaced it with a `Priority` `IntEnum` (LOW=1, MEDIUM=2, HIGH=3) so priority sorting is numeric and typos are rejected.
+
+I also moved "mark complete and spawn the next occurrence" into `Scheduler.mark_task_complete()` rather than `Task.mark_complete()`, because creating a new task requires adding it to the *pet*, which a lone Task has no access to.
 
 ---
 
