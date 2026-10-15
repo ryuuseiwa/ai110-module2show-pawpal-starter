@@ -4,30 +4,33 @@
 
 **a. Initial design**
 
-Three core actions a user should be able to perform:
+I wanted PawPal+ to be a simple pet care system that helps owners organize their pets' daily routines without keeping track of everything in their heads.
 
-1. **Add a pet** (name, species, age) to their household.
-2. **Schedule a care task** for a pet — e.g. a walk at 08:00 for 30 minutes, daily, high priority.
-3. **See today's schedule** — every task for every pet, in time order, with warnings when two tasks collide.
+The three main actions I wanted users to be able to do were:
 
-My initial UML (`diagrams/uml_draft.mmd`) had four classes:
+1. **Add a pet** with basic information like its name, species, and age.
+2. **Schedule care tasks** such as feeding, walking, grooming, or giving medication.
+3. **View a daily schedule** that organizes all tasks and points out any scheduling conflicts.
 
-- **Task** (dataclass) — one care activity: description, time (`"HH:MM"`), duration, priority, frequency, and completion status. Its only behavior was `mark_complete()`.
-- **Pet** (dataclass) — pet details plus the list of tasks that belong to that pet; responsible for adding/removing its own tasks.
-- **Owner** — holds multiple pets and exposes `get_all_tasks()`, the single place where every pet's tasks are gathered together.
-- **Scheduler** — the "brain". It holds a reference to an `Owner` and reads tasks through `get_all_tasks()`, so it always works across all pets. It is responsible for sorting, filtering, conflict detection, and producing today's schedule.
+My initial UML (`diagrams/uml_draft.mmd`) used four classes:
 
-Relationships: Owner *has* many Pets (aggregation), a Pet *owns* many Tasks (composition), and the Scheduler *reads from* the Owner.
+- **Owner:** manages the pets and gives access to all of their tasks through `get_all_tasks()`.
+- **Pet:** stores information about each pet and the tasks assigned to it.
+- **Task:** one care activity, with its description, time, duration, frequency, and completion status.
+- **Scheduler:** organizes tasks. It sorts, filters, and finds conflicts.
+
+The relationships are: an Owner *has* many Pets, a Pet *owns* many Tasks, and the Scheduler *reads from* the Owner. I wanted each class to have one clear job instead of putting everything into one class. I also wanted the Scheduler to hold most of the scheduling logic, so I could add features later without changing the whole system.
 
 **b. Design changes**
 
-Yes. When I asked the AI to review the skeleton for missing relationships and bottlenecks, it flagged three problems, and I made these changes:
+Yes. I made several changes after reviewing my skeleton with Claude Code:
 
-1. **Tasks didn't know which pet they belonged to.** `Owner.get_all_tasks()` returns a flat list, so once tasks were merged the Scheduler couldn't filter by pet or print "Mochi: walk". I added a `pet_name` field on `Task` that `Pet.add_task()` fills in automatically, instead of returning `(pet, task)` tuples everywhere.
-2. **Recurring tasks had no date.** "Daily" is meaningless without knowing *which* day a task is for, so I added `due_date: date` and a `next_occurrence()` method that uses `timedelta` to build the next instance.
-3. **Priority as a free string would sort alphabetically** ("high" < "low" < "medium"). I replaced it with a `Priority` `IntEnum` (LOW=1, MEDIUM=2, HIGH=3) so priority sorting is numeric and typos are rejected.
+1. **Tasks didn't know which pet they belonged to.** The Scheduler collects tasks from several pets into one list, so I added a `pet_name` attribute that `Pet.add_task()` fills in automatically.
+2. **Recurring tasks had no date.** I had a frequency like "daily" or "weekly", but no specific date to calculate the next one from. I added `due_date` and `next_occurrence()`.
+3. **Priority was a plain string,** which would sort alphabetically ("high" < "low" < "medium"). I changed it to a `Priority` `IntEnum` (LOW=1, MEDIUM=2, HIGH=3), so sorting compares numbers instead.
+4. **Completing a recurring task belongs in the Scheduler.** Creating the next occurrence means adding a new task to the *pet*, which a lone Task can't do. I put this in `Scheduler.mark_task_complete()` instead of spreading completion methods across several classes.
 
-I also moved "mark complete and spawn the next occurrence" into `Scheduler.mark_task_complete()` rather than `Task.mark_complete()`, because creating a new task requires adding it to the *pet*, which a lone Task has no access to.
+These changes showed me why planning the structure before coding matters. Things that seem minor at the start can turn into problems once different features have to work together.
 
 ---
 
@@ -35,23 +38,21 @@ I also moved "mark complete and spawn the next occurrence" into `Scheduler.mark_
 
 **a. Constraints and priorities**
 
-The scheduler considers:
+The scheduler considers **time** (start time and duration), **priority**, **frequency and due date**, **completion status**, and **how much time the owner has available**.
 
-- **Time of day.** Every task has a `"HH:MM"` start time and a duration. This drives sorting, conflict detection, and finding the next free slot.
-- **Date and recurrence.** Each task has a `due_date` and repeats once, daily, or weekly. Only tasks due on the selected day show up in that day's schedule.
-- **Priority** (low/medium/high). It is used by `sort_by_priority()`, and it decides what survives in `plan_day()` when time is short.
-- **The owner's available minutes.** `plan_day(available_minutes)` treats this as a hard budget.
-- **Completion status.** Finished tasks no longer cause conflicts or use up time.
+I treated **time as the most important constraint**, followed by priority. For example, if someone has two pets and walks one at 8:00 for 30 minutes, then gives the other medication at 8:15, those tasks overlap even though they start at different times. I wanted the system to catch situations like that, not just sort tasks and assume everything works out.
 
-I decided that **time** was the most important constraint, followed by **priority**. A pet owner's day is organized by the clock, so the default view is chronological. Priority matters most when there isn't enough time. Skipping a play session is fine, but skipping medication or a meal isn't, so the time-budget planner chooses tasks by priority first and then shows the chosen ones in time order. I left out softer "preferences" (such as "Mochi prefers walks in the morning") because they would make the model more complicated without changing the core behaviors this project is graded on.
+Priority matters because pet care tasks aren't all equally urgent. Medication or feeding should come before playing with a toy. That's why I added priority-based sorting and a daily plan (`plan_day()`) that picks tasks based on the time the owner actually has. I also added recurring tasks, because feeding and walking happen every day. Instead of making the user re-enter them, the system creates the next occurrence automatically when one is completed.
 
 **b. Tradeoffs**
 
-**`plan_day()` is greedy, not optimal.** It goes through tasks in priority order and keeps each one that still fits the remaining minutes. It does not search for the combination that fills the time budget best (that would be the knapsack problem). As a result, it can leave minutes unused. With 40 minutes, a high-priority 30-minute walk is kept first, so two medium-priority 20-minute tasks that would together fill all 40 minutes won't both fit. This is reasonable here because the owner's real goal is to make sure the important tasks happen, not to fill every minute. A greedy rule is also easy to explain ("kept because it is high priority and fits"), and an optimal solver couldn't explain its choices that simply.
+The biggest tradeoff was how complicated the scheduler should be.
 
-A second tradeoff concerns conflicts. **`detect_conflicts()` checks for overlapping durations, not only exact time matches, but it only warns and never moves tasks automatically.** An 08:00 30-minute walk and an 08:15 grooming session are flagged even though their times differ. However, the scheduler doesn't decide which task should move, because the owner knows things it doesn't (for example, that a partner can handle one of them). The UI shows the next free slot instead, so the fix takes one step.
+**The daily plan uses a greedy algorithm.** It picks higher-priority tasks first and checks whether each one fits in the remaining time. With 40 minutes available, it might take a 30-minute high-priority task instead of two 20-minute medium-priority tasks, so it doesn't always use every minute. I think that's right for pet care, because getting the important tasks done matters more than fitting in as many tasks as possible. A more advanced algorithm could find a better combination, but that complexity wasn't needed for this project, and a greedy rule is easy to explain to the user ("kept because it's high priority and fits").
 
-When I evaluated how to simplify the conflict check, the more "Pythonic" alternative was `itertools.combinations(tasks, 2)` with a single overlap test. That version is shorter, but it compares every pair. I kept my version, which sorts the tasks and stops early once a later task starts after the current one ends. It is still easy to read with the comment above the loop, it skips pairs that can't overlap, and the early stop makes the "sorted by start time" idea explicit.
+**Conflicts are warnings, not automatic fixes.** The system checks for overlapping durations, not only exact time matches, but it lets the owner decide what to do. The system doesn't know everyone's situation. Two tasks might overlap, but another family member could handle one of them. To make conflicts easier to fix, the app suggests the next available time slot.
+
+Overall, I tried to balance being useful with keeping things simple.
 
 ---
 
@@ -59,23 +60,21 @@ When I evaluated how to simplify the conflict check, the more "Pythonic" alterna
 
 **a. How you used AI**
 
-I used Claude Code in agent mode inside VS Code throughout the project:
+I mainly used Claude Code in VS Code. I started by giving it the project requirements and asking it to help plan the architecture. It generated the first UML diagram and the class skeletons. After that, I used agent mode to implement the classes, the scheduling methods, the CLI demo, the tests, and the Streamlit connection.
 
-- **Design.** It turned my three core actions into the four-class UML draft, and then reviewed the skeleton for missing relationships. That review is where the `pet_name`, `due_date`, and `Priority` enum changes in section 1b came from.
-- **Implementation.** It edited several files at once (`pawpal_system.py`, `main.py`, `app.py`, and the tests), which mattered for recurrence, because that change touches `Task`, `Scheduler`, and the UI.
-- **Testing.** It drafted the edge-case test plan (empty pet, duplicate times, back-to-back tasks, month rollover, completing a task twice) and ran `pytest` after every change.
-- **Verification of the UI.** It drove the Streamlit app headlessly with `streamlit.testing.v1.AppTest`: adding pets, creating a conflict, marking a task complete, and reloading from `data.json`. This confirmed that the UI really calls the backend instead of only rendering.
-- **Comparing models.** I gave the same recurrence prompt to two other models (see `ai_interactions.md`).
+The most useful thing about agent mode was that it could work across several files at once. For example, recurring tasks needed changes to `Task`, `Scheduler`, the demo, and the tests together.
 
-The most helpful prompts were specific and pointed at a file, for example: *"Based on my skeletons in `pawpal_system.py`, how should the Scheduler retrieve all tasks from the Owner's pets?"* and *"What are the most important edge cases to test for a pet scheduler with sorting and recurring tasks?"* Asking for edge cases was more useful than asking it to "write tests", because it produced cases I hadn't thought of.
+I also used AI to brainstorm edge cases. Instead of just asking it to "write tests", I asked what kinds of situations could cause problems for a pet scheduler. That surfaced overlapping tasks, invalid times, dates changing at the end of a month, and a recurring task accidentally being completed twice. Specific questions worked much better than vague ones. Asking *how the Scheduler should get tasks from multiple pets* gave a much more useful answer than asking it to "improve the code."
 
 **b. Judgment and verification**
 
-- **Rejected:** One model's recurrence answer had `Pet.add_task()` *raise an error* if `task.pet_name` didn't already match the pet. I rejected this because in my design `add_task()` is what *sets* `pet_name`, so that check would make it impossible to add a new task at all. The same answer also raised an error for an unknown frequency inside `next_occurrence()`. I validate frequency once, in `Task.__post_init__`, so a bad value fails when the task is created instead of later when someone completes it.
-- **Modified:** Both models suggested putting `complete_task()` on `Pet` and adding an `Owner.complete_task(pet_name, task)` wrapper. I kept the logic in `Scheduler.mark_task_complete()` instead, because the assignment treats the Scheduler as the one "brain" for managing tasks, and having the same operation in three places makes it unclear which one the UI should call.
-- **Accepted, after checking:** Both models pointed out that completing the same task twice would create two future copies, and that `list.remove()` on a dataclass compares by value, so it could remove an identical twin instead of the intended task. I didn't take this on trust. I checked my own code, confirmed that both problems were real (nothing stopped a second completion, and `remove_task` used `in`/`remove`), then added a guard (`if task.completed: return None`) and identity-based removal, together with two tests (`test_completing_twice_does_not_duplicate_next_occurrence` and `test_remove_task_removes_only_that_object`). The whole suite passed (39/39).
+I didn't accept every AI suggestion.
 
-In general, I checked AI output by running it rather than reading it: `python main.py` for visible behavior, `pytest` for regressions, and `AppTest` for the UI.
+- **Rejected:** adding completion methods to both `Pet` and `Owner`. That could work, but the Scheduler was already responsible for managing tasks, and spreading one operation across several classes would make the system harder to follow. I kept it in `Scheduler.mark_task_complete()`.
+- **Rejected:** requiring a task's `pet_name` to already match the pet before it could be added. My design has `Pet.add_task()` *assign* the pet's name, so that check would block every newly created task.
+- **Accepted:** the model comparison found two real issues. Completing the same recurring task twice could create duplicate future tasks. And removing a task could remove the wrong one if two tasks had identical information, because Python dataclasses compare by value. I added a double-completion guard, changed task removal to use object identity, and made sure both cases have tests.
+
+This was an important lesson: AI can suggest solutions that look correct but don't fit the structure of the existing project. I still need to understand what the code does and decide whether a suggestion actually makes the system better.
 
 ---
 
@@ -83,26 +82,29 @@ In general, I checked AI output by running it rather than reading it: `python ma
 
 **a. What you tested**
 
-There are 39 tests in `tests/test_pawpal.py`:
+PawPal+ has 39 automated tests that cover:
 
-- **Core objects:** completing a task, adding a task (count and pet tag), gathering tasks from every pet, and rejecting invalid times and duplicate pet names.
-- **Sorting:** chronological order, unpadded times like `"9:00"`, date before time, priority then time, and an empty list.
-- **Filtering:** by pet, by status, combined filters, and a pet with no tasks.
-- **Recurrence:** daily (+1 day), weekly (+7 days), rolling over from Oct 31 to Nov 1, one-off tasks not repeating, the copy being independent, and no duplicates when a task is completed twice.
-- **Conflicts:** exact duplicates, overlaps for the same pet, back-to-back tasks (no conflict), the same time on different days (no conflict), completed tasks ignored, and a three-way conflict producing three pairs.
-- **Next free slot, time-budget plan, and JSON save/load round-trip.**
+- **Core functionality:** adding pets, assigning tasks, completing tasks, getting tasks from multiple pets, and rejecting invalid times and duplicate pet names.
+- **Sorting:** chronological order, and higher-priority tasks first when sorting by priority.
+- **Filtering:** by pet, date, and completion status.
+- **Recurring tasks:** creating the next daily or weekly occurrence, crossing into a new month, and not creating duplicates.
+- **Conflict detection:** overlapping tasks, including tasks with different start times whose durations overlap.
+- **Extra features:** finding available time slots, building daily plans, and saving and loading with JSON.
 
-These tests matter because the scheduler's value depends on edge cases that are easy to get wrong silently. Plain string sorting puts `"9:00"` after `"10:00"`, a naive conflict check flags back-to-back tasks, and a recurrence bug can quietly fill the schedule with duplicates. Each of these would look fine in a quick demo and still be wrong.
+Testing recurring tasks was especially important, because a small mistake could create duplicate tasks or put them on the wrong dates. I also wanted to make sure that two back-to-back tasks are *not* flagged as a conflict.
+
+The recorded test run showed **all 39 tests passing**. The Streamlit app was also tested with Streamlit's `AppTest` to check that adding pets, creating tasks, and marking tasks complete actually go through the backend.
 
 **b. Confidence**
 
-**4/5.** Every behavior I implemented has tests for the normal case and the edge cases, and the UI flow was tested end-to-end. Next, I would test:
+**4/5 stars.** The main features are tested, including several edge cases, so I'm fairly confident. I wouldn't give it 5 because some situations still need testing:
 
-- tasks that cross midnight (23:30 for 60 minutes), which currently aren't compared with tasks early the next day
-- completing a recurring task long after its due date (the next copy is anchored to `due_date`, so it could already be overdue)
-- `data.json` being corrupted or edited by hand
-- two browser tabs writing to `data.json` at the same time
-- very large schedules, for performance
+- tasks that continue past midnight
+- recurring tasks completed several days late
+- a saved JSON file that gets corrupted
+- a much larger number of pets and tasks, to check performance
+
+It's reliable for its current scope, but there's still room to improve before it could be a fully developed app.
 
 ---
 
@@ -110,27 +112,33 @@ These tests matter because the scheduler's value depends on edge cases that are 
 
 **a. What went well**
 
-I'm most satisfied with how the classes are separated. Because `Scheduler` reads everything through `Owner.get_all_tasks()`, every feature (sorting, filtering, conflicts, free slots, planning) worked across several pets automatically, and the Streamlit UI needed almost no logic of its own. It only calls methods and displays the results. Building CLI-first paid off: by the time I connected the UI, the backend already had 39 passing tests, and the UI worked on the first headless run.
+The most successful part was how the components worked together. Keeping Owner, Pet, Task, and Scheduler separate made it easy to add features without rewriting everything. I'm also happy with the scheduling features, especially conflict detection, recurring tasks, and finding open time slots. PawPal+ ended up being more than a basic to-do list. It helps owners make decisions based on priorities and the time they have.
+
+Building the backend before connecting Streamlit also went well. Because the core logic was already tested, it was easy to tell whether a problem came from the scheduling logic or from the UI.
 
 **b. What you would improve**
 
-- Give each task a unique `id` instead of relying on object identity, so that persistence, editing, and removal from the UI are more robust.
-- Support editing and deleting tasks in the UI (right now you can only add and complete them).
-- Handle tasks that cross midnight, and let late recurring tasks catch up to today's date.
-- Replace the greedy `plan_day()` with something that also respects fixed times (for example, medication must happen at 12:00), instead of only respecting a total number of minutes.
+- **Edit and delete tasks in the UI.** Right now users can add and complete tasks, but can't change them afterwards.
+- **Better handling of overdue tasks.** If someone forgets a recurring task for several days, the system should handle that more intelligently.
+- **A unique ID for each task,** so tasks can be tracked and updated more reliably.
+- **A smarter daily plan** that considers fixed appointment times as well as priority. Medication can't just be moved because it doesn't fit.
 
 **c. Key takeaway**
 
-AI is very good at producing plausible code, but being the "lead architect" means deciding where responsibilities belong. When two models suggested putting task completion on `Pet` and `Owner`, both versions worked, but they would have spread one operation across three classes. The useful part of their answers was the *edge cases* (double completion and equality versus identity), not the structure. I learned to take the AI's ideas but keep the design decisions myself, and to trust a suggestion only after a test I wrote proves it.
+My biggest takeaway is that **AI can help write code, but understanding how everything works together is still my responsibility.** Before this project, I mostly thought about whether individual pieces of code worked. Now I understand that designing a system also means deciding how the parts communicate, what each class is responsible for, and how to handle unexpected situations. Using AI well isn't just about writing prompts. It's about asking the right questions, reviewing the results, testing the code, and deciding what should or shouldn't go in.
 
 ---
 
 ## 6. AI Strategy
 
-**Which AI coding assistant features were most effective?** Agent mode with editing across several files was the most effective, especially for recurrence and persistence, which each changed `pawpal_system.py`, `main.py`, `app.py`, and the tests together. Being able to run `pytest` and `main.py` from inside the agent loop mattered just as much, because every change was checked immediately instead of me assuming it worked.
+**Which AI coding assistant features were most effective?**
+Agent mode was the most effective because it could change several files while keeping the project structure consistent. That helped most with recurring tasks and data persistence, which touched several parts of the system. Running the tests and the demo during development, instead of waiting until the end, helped too. The most valuable thing overall was asking the AI to review my design and find problems before they became harder to fix.
 
-**One AI suggestion I rejected or modified to keep the design clean:** the `Pet.complete_task()` and `Owner.complete_task()` wrappers, plus the `add_task()` check that `pet_name` already matched (details in 3b). I kept a single `Scheduler.mark_task_complete()` entry point.
+**One AI suggestion I rejected or modified:**
+I rejected adding separate task-completion methods to `Pet` and `Owner`, and kept completion in the Scheduler, which already manages tasks. It's simpler and makes it clear which part of the system handles scheduling. I also rejected requiring a matching `pet_name` before adding a task, because my design assigns it automatically.
 
-**How did separate chat sessions help?** I kept the model-comparison prompts in their own fresh contexts with no project files attached. That made their answers a fair, independent comparison instead of an echo of my existing code, and it showed which ideas (the double-completion guard) appeared without being prompted. Keeping planning, implementation, and testing as separate phases with their own commits had the same benefit: each phase had one goal, so I could review the AI's work against that goal alone.
+**How did separate chat sessions help?**
+For the model comparison, I gave the same prompt to two models in separate, fresh contexts without my project files. That made the comparison fair: I could see which suggestions both models agreed on (the double-completion guard) and where they differed. It also kept me from relying too much on one response. Working in separate phases, each with its own commit, helped in a similar way, because each phase had a single goal that I could check the AI's work against.
 
-**Being the "lead architect":** AI tools can write any of the pieces quickly, so the human's job becomes defining the boundaries. That means deciding which class owns which responsibility, which tradeoffs are acceptable (greedy planning, warn-only conflicts), and what counts as "verified". I made the structural decisions and used AI to implement them, to find edge cases, and to challenge my design, but I didn't let it decide the structure.
+**What did being the lead architect mean to me?**
+It meant taking responsibility for the overall design instead of letting AI make every decision. AI generated much of the code, but I still had to decide which features were necessary, how the classes should interact, and whether the suggested solutions made sense. I also had to weigh simplicity against functionality. For example, I chose a greedy planner and warning-based conflict detection because they're easy to understand and fit the scope of the project. Being the lead architect doesn't mean writing every line myself. It means understanding the system, making the design decisions, and making sure the result actually meets the requirements.
